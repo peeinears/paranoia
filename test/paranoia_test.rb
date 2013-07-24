@@ -10,6 +10,7 @@ FileUtils.rm_f DB_FILE
 ActiveRecord::Base.establish_connection :adapter => 'sqlite3', :database => DB_FILE
 ActiveRecord::Base.connection.execute 'CREATE TABLE parent_models (id INTEGER NOT NULL PRIMARY KEY, deleted_at DATETIME)'
 ActiveRecord::Base.connection.execute 'CREATE TABLE paranoid_models (id INTEGER NOT NULL PRIMARY KEY, parent_model_id INTEGER, deleted_at DATETIME)'
+ActiveRecord::Base.connection.execute 'CREATE TABLE stubborn_models (id INTEGER NOT NULL PRIMARY KEY, parent_model_id INTEGER, deleted_at DATETIME)'
 ActiveRecord::Base.connection.execute 'CREATE TABLE featureful_models (id INTEGER NOT NULL PRIMARY KEY, deleted_at DATETIME, name VARCHAR(32))'
 ActiveRecord::Base.connection.execute 'CREATE TABLE plain_models (id INTEGER NOT NULL PRIMARY KEY, deleted_at DATETIME)'
 ActiveRecord::Base.connection.execute 'CREATE TABLE callback_models (id INTEGER NOT NULL PRIMARY KEY, deleted_at DATETIME)'
@@ -17,6 +18,11 @@ ActiveRecord::Base.connection.execute 'CREATE TABLE related_models (id INTEGER N
 ActiveRecord::Base.connection.execute 'CREATE TABLE employers (id INTEGER NOT NULL PRIMARY KEY, deleted_at DATETIME)'
 ActiveRecord::Base.connection.execute 'CREATE TABLE employees (id INTEGER NOT NULL PRIMARY KEY, deleted_at DATETIME)'
 ActiveRecord::Base.connection.execute 'CREATE TABLE jobs (id INTEGER NOT NULL PRIMARY KEY, employer_id INTEGER NOT NULL, employee_id INTEGER NOT NULL, deleted_at DATETIME)'
+
+module ActiveRecord
+  class RecordNotDestroyed < ActiveRecord::ActiveRecordError
+  end
+end
 
 class ParanoiaTest < Test::Unit::TestCase
   def test_plain_model_class_is_not_paranoid
@@ -60,6 +66,7 @@ class ParanoiaTest < Test::Unit::TestCase
   end
 
   def test_destroy_behavior_for_paranoid_models
+    ParanoidModel.unscoped.delete_all
     model = ParanoidModel.new
     assert_equal 0, model.class.count
     model.save!
@@ -190,19 +197,62 @@ class ParanoiaTest < Test::Unit::TestCase
     assert_equal false, model.destroyed?
   end
 
-  def test_real_destroy
+  def test_destroy!
     model = ParanoidModel.new
-    model.save
+    model.save!
     model.destroy!
 
-    assert_equal 0, ParanoidModel.unscoped.where(id: model.id).count
+    assert_equal 0, ParanoidModel.where(id: model.id).count
+    assert_equal 1, ParanoidModel.unscoped.where(id: model.id).count
+
+    model = StubbornModel.new
+    model.save!
+
+    assert_raise(ActiveRecord::RecordNotDestroyed) do
+      model.destroy!
+    end
+
+    assert_equal 1, StubbornModel.where(id: model.id).count
   end
 
-  def test_real_delete
+  def test_destroy_permanently
     model = ParanoidModel.new
-    model.save
-    model.delete!
+    model.save!
+    destroyed = model.destroy_permanently
+
+    assert_equal model, destroyed
     assert_equal 0, ParanoidModel.unscoped.where(id: model.id).count
+
+    model = StubbornModel.new
+    model.save!
+    destroyed = model.destroy_permanently
+
+    assert_equal 1, StubbornModel.where(id: model.id).count
+    assert_equal false, destroyed
+  end
+
+  def test_destroy_permanently!
+    model = ParanoidModel.new
+    model.save!
+    model.destroy_permanently!
+
+    assert_equal 0, ParanoidModel.unscoped.where(id: model.id).count
+
+    model = StubbornModel.new
+    model.save!
+
+    assert_raise(ActiveRecord::RecordNotDestroyed) do
+      model.destroy_permanently!
+    end
+
+    assert_equal 1, StubbornModel.where(id: model.id).count
+  end
+
+  def test_delete_permanently
+    model = StubbornModel.new
+    model.save!
+    model.delete_permanently
+    assert_equal 0, StubbornModel.unscoped.where(id: model.id).count
   end
 
   private
@@ -233,6 +283,11 @@ end
 class CallbackModel < ActiveRecord::Base
   acts_as_paranoid
   before_destroy { |model| model.instance_variable_set :@callback_called, true }
+end
+
+class StubbornModel < ActiveRecord::Base
+  acts_as_paranoid
+  before_destroy { |model| false }
 end
 
 class ParentModel < ActiveRecord::Base
